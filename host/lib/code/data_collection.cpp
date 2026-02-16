@@ -117,7 +117,6 @@ void DataCollection:: process_sample(uint32_t *data_packet, int start_idx)
     if (use_pot){
         for (int i = 0; i < dc_meta.num_encoders; i++){
             proc_sample.pot_values[i] = data_packet[idx++];
-            cout << proc_sample.pot_values[i] << endl;
         }  
     }
 }
