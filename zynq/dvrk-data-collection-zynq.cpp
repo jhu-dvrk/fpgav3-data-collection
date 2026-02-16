@@ -56,6 +56,7 @@ volatile uint32_t *GPIO_MEM_REGION;
 
 // FLAG for including Processor IO in data packets
 bool use_ps_io_flag = false;
+bool use_pot_flag = true;
 
 ///////////////////////////////////
 ///// STATE MACHINE VARIABLES /////
@@ -129,6 +130,10 @@ enum DataCollectionStateMachine {
     SM_READY = 0,
     SM_SEND_READY_STATE_TO_HOST,
     SM_WAIT_FOR_HOST_HANDSHAKE,
+    SM_WAIT_FOR_HOST_FLAG_CMD,
+    SM_WAIT_FOR_HOST_FLAG_VALUE,
+    SM_WAIT_FOR_HOST_SAMPLE_RATE_CMD,
+    SM_WAIT_FOR_HOST_SAMPLE_RATE_VALUE,
     SM_WAIT_FOR_HOST_START_CMD,
     SM_START_DATA_COLLECTION,
     SM_CHECK_FOR_STOP_DATA_COLLECTION_CMD,
@@ -322,13 +327,21 @@ static uint16_t calculate_quadlets_per_sample(uint8_t num_encoders, uint8_t num_
     // Encoder Velocity Predicted (64 * num of encoders -> truncated to 32bits)     [1 quadlet * num of encoders]
     // Motur Current and Motor Status (32 * num of Motors -> each are 16 bits)      [1 quadlet * num of motors]
     // Digtial IO Values  (optional, used if PS IO is enabled ) 32 bits             [1 quadlet * digital IO]
-    // MIO Pins (optional, used if PS IO is enabled ) 4 bits -> pad 32 bits         [1 quadlet * MIO PINS]                  
-    if (use_ps_io_flag){
-        return (2 + 1 + 1 + (2*(num_encoders)) + (num_motors));
-    } else {
-        return (2 + (2*(num_encoders)) + (num_motors));
-    }
+    // MIO Pins (optional, used if PS IO is enabled ) 4 bits -> pad 32 bits         [1 quadlet * MIO PINS]  
+    // POT pins (optional, used if Pot is enabled) num_encoders * 16 bits    
     
+    int default_quadlets_per_sample = (2 + (2*(num_encoders)) + (num_motors));
+    int quadlets_per_sample = default_quadlets_per_sample;
+
+    if (use_ps_io_flag){
+        quadlets_per_sample += 2;
+    }
+
+    if (use_pot_flag) {
+        quadlets_per_sample += (1 * num_encoders);
+    }
+
+    return quadlets_per_sample;
 }
 
 // calculates the # of samples per packet in quadlets
@@ -428,6 +441,12 @@ static bool load_data_packet(Dvrk_Controller dvrk_controller, uint32_t *data_pac
             data_packet[count++] = (uint32_t) returnMIOPins();
         }
 
+        if (use_pot_flag){
+            for (int i = 0; i < num_encoders; i++) {
+                data_packet[count++] = dvrk_controller.Board->GetAnalogInput(i);
+            }
+        }
+
         
         if (useSampleRate){
             
@@ -502,42 +521,8 @@ SM wait_for_host_handshake( SM sm ){
     if (sm.udp_ret > 0) {
         if (strcmp(recvd_cmd,  HOST_READY_CMD) == 0) {
             cout << "Received Message - " <<  HOST_READY_CMD << endl;
-            sm.state = SM_SEND_DATA_COLLECTION_METADATA;
-        }                    
-        
-        else if (strcmp(recvd_cmd, HOST_READY_CMD_W_PS_IO) == 0){
-            cout << "Received Message - " <<  HOST_READY_CMD_W_PS_IO << endl;
-            use_ps_io_flag = true;
-
-            // special case: need to resize double_buffer size to account
-            // for extra ps io data
-            reset_double_buffer_info(&db, dvrk_controller.Board); 
-            sm.state = SM_SEND_DATA_COLLECTION_METADATA;
-        }
-
-        else if (strcmp(recvd_cmd, HOST_READY_CMD_W_SAMPLE_RATE) == 0){
-            cout << "Received Message - " <<  HOST_READY_CMD_W_SAMPLE_RATE << endl;
-            useSampleRate = true;
-            
-
-            while(udp_nonblocking_receive(&udp_host, recvd_cmd, CMD_MAX_STRING_SIZE) <= 0){}
-
-            int * sample_rate;
-            
-            sample_rate = (int *) recvd_cmd;
-
-            SAMPLE_RATE = *sample_rate;
-            printf("NEW SAMPLE RATE: %d\n", *sample_rate);
-
-            use_ps_io_flag = true;
-
-            // special case: need to resize double_buffer size to account
-            // for extra ps io data
-            reset_double_buffer_info(&db, dvrk_controller.Board); 
-            sm.state = SM_SEND_DATA_COLLECTION_METADATA;
-        }
-
-        else {
+            sm.state = SM_WAIT_FOR_HOST_FLAG_CMD;
+        } else {
             sm.ret = SM_OUT_OF_SYNC;
             sm.last_state = sm.state;
             sm.state = SM_TERMINATE;
@@ -545,6 +530,119 @@ SM wait_for_host_handshake( SM sm ){
     }
     else if (sm.udp_ret == UDP_DATA_IS_NOT_AVAILABLE_WITHIN_TIMEOUT || sm.udp_ret == UDP_NON_UDP_DATA_IS_AVAILABLE) {
         sm.state = SM_WAIT_FOR_HOST_HANDSHAKE;
+    }
+    else {
+        sm.ret = SM_UDP_ERROR;
+        sm.last_state = sm.state;
+        sm.state = SM_TERMINATE;
+    }
+
+    return sm;
+}
+
+SM wait_for_host_flag_cmd(SM sm){
+    memset(recvd_cmd, 0, CMD_MAX_STRING_SIZE);
+    sm.udp_ret = udp_nonblocking_receive(&udp_host, recvd_cmd, CMD_MAX_STRING_SIZE);
+
+    if (sm.udp_ret > 0) {
+        if (strcmp(recvd_cmd, HOST_FLAG_CMD) == 0) {
+            cout << "Received Message - " << HOST_FLAG_CMD << endl;
+            sm.state = SM_WAIT_FOR_HOST_FLAG_VALUE;
+        } else {
+            sm.ret = SM_OUT_OF_SYNC;
+            sm.last_state = sm.state;
+            sm.state = SM_TERMINATE;
+        }
+    }
+    else if (sm.udp_ret == UDP_DATA_IS_NOT_AVAILABLE_WITHIN_TIMEOUT || sm.udp_ret == UDP_NON_UDP_DATA_IS_AVAILABLE) {
+        sm.state = SM_WAIT_FOR_HOST_FLAG_CMD;
+    }
+    else {
+        sm.ret = SM_UDP_ERROR;
+        sm.last_state = sm.state;
+        sm.state = SM_TERMINATE;
+    }
+
+    return sm;
+}
+
+SM wait_for_host_flag_value(SM sm){
+    uint8_t flag_cmd = 0x00;
+    sm.udp_ret = udp_nonblocking_receive(&udp_host, &flag_cmd, sizeof(flag_cmd));
+
+    if (sm.udp_ret > 0) {
+        use_ps_io_flag = (flag_cmd & ENABLE_PSIO_MSK);
+        use_pot_flag = (flag_cmd & ENABLE_POT_MSK);
+        useSampleRate = (flag_cmd & ENABLE_SAMPLE_RATE_MSK);
+
+        cout << "Received Flag Byte: 0x" << std::hex << static_cast<int>(flag_cmd) << std::dec << endl;
+
+        if (useSampleRate){
+            sm.state = SM_WAIT_FOR_HOST_SAMPLE_RATE_CMD;
+        } else {
+            if (use_ps_io_flag || use_pot_flag){
+                reset_double_buffer_info(&db, dvrk_controller.Board);
+            }
+            sm.state = SM_SEND_DATA_COLLECTION_METADATA;
+        }
+    }
+    else if (sm.udp_ret == UDP_DATA_IS_NOT_AVAILABLE_WITHIN_TIMEOUT || sm.udp_ret == UDP_NON_UDP_DATA_IS_AVAILABLE) {
+        sm.state = SM_WAIT_FOR_HOST_FLAG_VALUE;
+    }
+    else {
+        sm.ret = SM_UDP_ERROR;
+        sm.last_state = sm.state;
+        sm.state = SM_TERMINATE;
+    }
+
+    return sm;
+}
+
+SM wait_for_host_sample_rate_cmd(SM sm){
+    memset(recvd_cmd, 0, CMD_MAX_STRING_SIZE);
+    sm.udp_ret = udp_nonblocking_receive(&udp_host, recvd_cmd, CMD_MAX_STRING_SIZE);
+
+    if (sm.udp_ret > 0) {
+        if (strcmp(recvd_cmd, HOST_SAMPLE_RATE_CMD) == 0){
+            cout << "Received Message - " << HOST_SAMPLE_RATE_CMD << endl;
+            sm.state = SM_WAIT_FOR_HOST_SAMPLE_RATE_VALUE;
+        } else {
+            sm.ret = SM_OUT_OF_SYNC;
+            sm.last_state = sm.state;
+            sm.state = SM_TERMINATE;
+        }
+    }
+    else if (sm.udp_ret == UDP_DATA_IS_NOT_AVAILABLE_WITHIN_TIMEOUT || sm.udp_ret == UDP_NON_UDP_DATA_IS_AVAILABLE) {
+        sm.state = SM_WAIT_FOR_HOST_SAMPLE_RATE_CMD;
+    }
+    else {
+        sm.ret = SM_UDP_ERROR;
+        sm.last_state = sm.state;
+        sm.state = SM_TERMINATE;
+    }
+
+    return sm;
+}
+
+SM wait_for_host_sample_rate_value(SM sm){
+    int host_sample_rate = 0;
+    sm.udp_ret = udp_nonblocking_receive(&udp_host, &host_sample_rate, sizeof(host_sample_rate));
+
+    if (sm.udp_ret > 0){
+        SAMPLE_RATE = host_sample_rate;
+        printf("NEW SAMPLE RATE: %d\n", SAMPLE_RATE);
+
+        // Keep existing behavior when sample-rate mode is enabled.
+        use_ps_io_flag = true;
+
+        if (use_ps_io_flag){
+            reset_double_buffer_info(&db, dvrk_controller.Board);
+        }
+
+        sm.state = SM_SEND_DATA_COLLECTION_METADATA;
+    }
+    else if (sm.udp_ret == UDP_DATA_IS_NOT_AVAILABLE_WITHIN_TIMEOUT || sm.udp_ret == UDP_NON_UDP_DATA_IS_AVAILABLE) {
+        sm.state = SM_WAIT_FOR_HOST_SAMPLE_RATE_VALUE;
     }
     else {
         sm.ret = SM_UDP_ERROR;
@@ -796,6 +894,22 @@ static int dataCollectionStateMachine()
         switch (sm.state) {
             case SM_WAIT_FOR_HOST_HANDSHAKE:
                 sm = wait_for_host_handshake(sm);
+                break;
+
+            case SM_WAIT_FOR_HOST_FLAG_CMD:
+                sm = wait_for_host_flag_cmd(sm);
+                break;
+
+            case SM_WAIT_FOR_HOST_FLAG_VALUE:
+                sm = wait_for_host_flag_value(sm);
+                break;
+
+            case SM_WAIT_FOR_HOST_SAMPLE_RATE_CMD:
+                sm = wait_for_host_sample_rate_cmd(sm);
+                break;
+
+            case SM_WAIT_FOR_HOST_SAMPLE_RATE_VALUE:
+                sm = wait_for_host_sample_rate_value(sm);
                 break;
 
             case SM_SEND_DATA_COLLECTION_METADATA:

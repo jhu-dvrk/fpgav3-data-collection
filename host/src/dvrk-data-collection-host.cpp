@@ -31,6 +31,7 @@ http://www.cisst.org/cisst/license.txt.
 #include <fstream>
 #include <string>
 #include <ctype.h>
+#include <climits>
 
 #include "data_collection.h"
 
@@ -76,6 +77,27 @@ static bool isFloat(const char* str)
     return hasDecimalPoint && strLength > 1;
 }
 
+static void printUsage(const char *progName)
+{
+    cout << endl;
+    cout << "                 dVRK Data Collection Program" << endl;
+    cout << "|-----------------------------------------------------------------------" << endl;
+    cout << "|Usage: " << progName << " <boardID> [-t <seconds>] [-s <Hz>] [-i] [-p]" << endl;
+    cout << "|" << endl;
+    cout << "|Arguments:" << endl;
+    cout << "|  <boardID>          Required. ID of the board to connect to." << endl;
+    cout << "|" << endl;
+    cout << "|Options:" << endl;
+    cout << "|  -t <seconds>       Optional. Duration for data capture in seconds (float)." << endl;
+    cout << "|  -s <Hz>            Optional. Sample rate in Hz (integer)." << endl;
+    cout << "|  -i                 Optional. Include PS IO in data packet." << endl;
+    cout << "|  -p                 Optional. Include potentiometer readings in data packet." << endl;
+    cout << "|  -h                 Show this help message." << endl;
+    cout << "|" << endl;
+    cout << "|[NOTE] Ensure the server is started before running the client." << endl;
+    cout << "__________________________________________________________________________" << endl;
+}
+
 static bool isExitKeyPressed()
 {
     fd_set readfds;
@@ -97,86 +119,105 @@ static bool isExitKeyPressed()
 int main(int argc, char *argv[])
 {
     float data_collection_duration_s= 0;
-    bool startFlag = false;
     bool timedCaptureFlag = false;
     bool use_ps_io_flag = false;
+    bool use_pot_flag = false;
     bool use_sample_rate = false;
-    uint8_t boardID; 
+    uint8_t options_mask = 0x00;
+    uint8_t boardID = 0;
     int sample_rate = 0;
-    
 
-    // cmd line variables
-    uint8_t min_args = 1;
-
-    if (argc == 1) {  
-        cout << endl;
-        cout << "                 dVRK Data Collection Program" << endl;
-        cout << "|-----------------------------------------------------------------------" << endl;
-        cout << "|Usage: " << argv[0] << " <boardID> [-t <seconds>] [-i]" << endl;
-        cout << "|" <<endl;
-        cout << "|Arguments:" << endl;
-        cout << "|  <boardID>          Required. ID of the board to connect to." << endl;
-        cout << "|" << endl;
-        cout << "|Options:" << endl;
-        cout << "|  -t <seconds>       Optional. Duration for data capture in seconds (float)." << endl;
-        cout << "|  -i                 Optional. Add PS IO to packet for data collection." << endl;
-        cout << "|" << endl;
-        cout << "|[NOTE] Ensure the server is started before running the client." << endl;
-        cout << "__________________________________________________________________________" << endl;
+    if (argc == 1) {
+        printUsage(argv[0]);
         return 0;
-    } 
+    }
+
+    if (argc == 2 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
+        printUsage(argv[0]);
+        return 0;
+    }
 
     if (!isInteger(argv[1])) {
         cout << "[ERROR] Invalid boardID arg: " << argv[1] << endl;
-        return -1;
-    } else {
-        boardID = atoi(argv[1]);
-    }
-
-    if (argc >= 6){
-        cout << "[ERROR] Too many cmd line args" << endl;
+        printUsage(argv[0]);
         return -1;
     }
 
-    for (int i = min_args + 1; i < argc; i++ ){
+    long parsed_board_id = strtol(argv[1], nullptr, 10);
+    if (parsed_board_id < 0 || parsed_board_id > UCHAR_MAX) {
+        cout << "[ERROR] boardID out of range [0, " << UCHAR_MAX << "]: " << argv[1] << endl;
+        return -1;
+    }
+    boardID = static_cast<uint8_t>(parsed_board_id);
 
-        if (argv[i][0] == '-') {
-
-            if (argv[i][1] == 't') {
-
-                if (!isFloat(argv[i+1])) {
-                    cout << "[ERROR] invalid time value " << argv[i+1] << " for timed capture. Pass in float" << endl;
+    opterr = 0;
+    optind = 1;
+    int opt = 0;
+    while ((opt = getopt(argc - 1, argv + 1, "t:s:iph")) != -1) {
+        switch (opt) {
+            case 't':
+                if (!isFloat(optarg)) {
+                    cout << "[ERROR] invalid time value " << optarg << " for timed capture. Pass in float" << endl;
                     return -1;
-                } else {
-                    data_collection_duration_s = atof(argv[i+1]);
-                    timedCaptureFlag = true;
-                    cout << "Timed Capture Enabled!" << endl;
-                    i+=1;
                 }
-            }
+                data_collection_duration_s = atof(optarg);
+                timedCaptureFlag = true;
+                cout << "Timed Capture Enabled!" << endl;
+                break;
 
-            else if (argv[i][1] == 's'){
-                if (!isInteger(argv[i+1])) {
-                    cout << "[ERROR] invalid sample rate value " << argv[i+1] << " for timed capture. Pass in Integer" << endl;
+            case 's':
+                if (!isInteger(optarg)) {
+                    cout << "[ERROR] invalid sample rate value " << optarg << " for timed capture. Pass in Integer" << endl;
                     return -1;
-                } else {
-                    use_sample_rate = true;
-                    sample_rate = atoi(argv[i+1]);
-                    cout << " Sample Rate set to " << sample_rate << "Hz" << endl;
-                    i+=1;
                 }
-            }
+                use_sample_rate = true;
+                sample_rate = atoi(optarg);
+                cout << " Sample Rate set to " << sample_rate << "Hz" << endl;
+                break;
 
-            else if (argv[i][1] == 'i' ) {
+            case 'i':
                 use_ps_io_flag = true;
                 cout << "PS IO pins will be included in data packet!" << endl;
-            } else {
-                cout << "[ERROR] Invalid arg: " << argv[i] << endl;
-            }
-        } else {
-            cout << "[ERROR] invalid arg: " << argv[i] << endl;
-            return -1;
+                break;
+
+            case 'p':
+                use_pot_flag = true;
+                cout << "Potentiometer readings will be included in data packet!" << endl;
+                break;
+
+            case 'h':
+                printUsage(argv[0]);
+                return 0;
+
+            case '?':
+                if (optopt == 't' || optopt == 's') {
+                    cout << "[ERROR] Option -" << static_cast<char>(optopt) << " requires a value" << endl;
+                } else {
+                    cout << "[ERROR] Invalid arg: -" << static_cast<char>(optopt) << endl;
+                }
+                printUsage(argv[0]);
+                return -1;
+
+            default:
+                printUsage(argv[0]);
+                return -1;
         }
+    }
+
+    if (optind < argc - 1) {
+        cout << "[ERROR] Unexpected extra positional argument: " << (argv + 1)[optind] << endl;
+        printUsage(argv[0]);
+        return -1;
+    }
+
+    if (use_ps_io_flag) {
+        options_mask |= ENABLE_PSIO_MSK;
+    }
+    if (use_pot_flag) {
+        options_mask |= ENABLE_POT_MSK;
+    }
+    if (use_sample_rate) {
+        options_mask |= ENABLE_SAMPLE_RATE_MSK;
     }
 
     bool ret;
@@ -184,7 +225,7 @@ int main(int argc, char *argv[])
     DataCollection *DC = new DataCollection();
     bool stop_data_collection = false;
 
-    if (!DC->init(boardID, use_ps_io_flag, use_sample_rate, sample_rate)) {
+    if (!DC->init(boardID, options_mask, sample_rate)) {
         return -1;
     }
 

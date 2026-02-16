@@ -113,7 +113,13 @@ void DataCollection:: process_sample(uint32_t *data_packet, int start_idx)
         proc_sample.digital_io = data_packet[idx++];
         proc_sample.mio_pins = data_packet[idx++];
     }
-    
+
+    if (use_pot){
+        for (int i = 0; i < dc_meta.num_encoders; i++){
+            proc_sample.pot_values[i] = data_packet[idx++];
+            cout << proc_sample.pot_values[i] << endl;
+        }  
+    }
 }
 
 int DataCollection::collect_data() {
@@ -207,6 +213,12 @@ void DataCollection::write_csv_headers() {
         myFile << ",DIGITAL_IO,MIO_PINS";
     }
 
+    if (use_pot){
+        for (int i = 1; i <= dc_meta.num_encoders; i++){
+            myFile << ",POT_" << i;
+        }
+    }
+
     myFile << std::endl;
 }
 
@@ -233,6 +245,14 @@ void DataCollection::process_and_write_data() {
 
         if (use_ps_io) {
             myFile << "," << proc_sample.digital_io << "," << proc_sample.mio_pins;
+        }
+
+        if (use_pot) {
+            myFile << ",";
+            for (int j = 0; j < dc_meta.num_encoders; j++) {
+                myFile << proc_sample.pot_values[j];
+                if (j < dc_meta.num_encoders - 1) myFile << ",";
+            }
         }
 
         myFile << std::endl;
@@ -272,7 +292,6 @@ void * DataCollection::collect_data_thread(void * args)
 }
 
 
-
 ////////////////////
 // PUBLIC METHODS //
 ////////////////////
@@ -287,14 +306,21 @@ DataCollection::DataCollection()
 
 // TODO: need to add useful return statements -> all the close socket cases are just returns
 // make sure logic checks out 
-bool DataCollection :: init(uint8_t boardID, bool usePSIO, bool useSampleRate, int sample_rate)
+bool DataCollection :: init(uint8_t boardID, uint8_t optionsMask, int sample_rate)
 {
     if(!udp_init(&sock_id, boardID)) {
         return false;
     }
 
-    if(useSampleRate){
-        use_sample_rate = true; 
+    const uint8_t supported_mask = ENABLE_PSIO_MSK | ENABLE_POT_MSK | ENABLE_SAMPLE_RATE_MSK;
+    options_mask = optionsMask & supported_mask;
+
+    use_ps_io = (options_mask & ENABLE_PSIO_MSK) != 0;
+    use_pot = (options_mask & ENABLE_POT_MSK) != 0;
+    use_sample_rate = (options_mask & ENABLE_SAMPLE_RATE_MSK) != 0;
+
+    if (use_sample_rate) {
+        this->sample_rate = static_cast<uint16_t>(sample_rate);
     }
 
 
@@ -305,28 +331,20 @@ bool DataCollection :: init(uint8_t boardID, bool usePSIO, bool useSampleRate, i
 
     bool error_flag = false;
 
-    use_ps_io = usePSIO;
-
     // Handshaking PS
     while(1) {
         switch(sm_state) {
             case SM_SEND_READY_STATE_TO_PS:
-
-                if (!use_ps_io && !use_sample_rate){
+                {
                     udp_transmit(sock_id, (char *)HOST_READY_CMD, sizeof(HOST_READY_CMD));
-                }
+                    udp_transmit(sock_id, (char *)HOST_FLAG_CMD, sizeof(HOST_FLAG_CMD));
+                    udp_transmit(sock_id, (void *)&options_mask, sizeof(options_mask));
 
-                if (use_ps_io){
-                    udp_transmit(sock_id, (char *)HOST_READY_CMD_W_PS_IO, sizeof(HOST_READY_CMD_W_PS_IO));
-                } 
-
-                if(use_sample_rate){
-                    udp_transmit(sock_id, (char *)HOST_READY_CMD_W_SAMPLE_RATE, sizeof(HOST_READY_CMD_W_SAMPLE_RATE));
-                    udp_transmit(sock_id, (int *) &sample_rate, sizeof(sample_rate));
+                    if (use_sample_rate){
+                        udp_transmit(sock_id, (char *)HOST_SAMPLE_RATE_CMD, sizeof(HOST_SAMPLE_RATE_CMD));
+                        udp_transmit(sock_id, (int *) &sample_rate, sizeof(sample_rate));
+                    }
                 }
-                
-                
-                
                 sm_state = SM_RECV_DATA_COLLECTION_META_DATA;
                 break;
 

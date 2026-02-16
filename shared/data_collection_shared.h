@@ -24,6 +24,7 @@ http://www.cisst.org/cisst/license.txt.
 
 const unsigned int MAX_NUM_ENCODERS = 8;
 const unsigned int MAX_NUM_MOTORS = 10;
+const unsigned int MAX_NUM_POTS = MAX_NUM_ENCODERS;
 // const unsigned int MAX_NUM_FT_READINGS = 6;
 
 // Default MTU=1500 (does not count 18 bytes for Ethernet frame header and CRC)
@@ -72,13 +73,21 @@ enum StateMachineReturnCodes {
     // HOST
     #define HOST_START_DATA_COLLECTION                      "HOST: START DATA COLLECTION"
     #define HOST_READY_CMD                                  "HOST: READY FOR DATA COLLECTION"
-    #define HOST_READY_CMD_W_PS_IO                          "HOST: READY FOR DATA COLLECTION - WITH PS IO"
-    #define HOST_READY_CMD_W_SAMPLE_RATE                    "HOST: READY FOR DATA COLLECTION - WITH SAMPLE RATE"
+    #define HOST_FLAG_CMD                                   "HOST: FLAG CMD"
+    #define HOST_SAMPLE_RATE_CMD                            "HOST: SAMPLE RATE CMD"
     #define HOST_RECVD_METADATA                             "HOST: RECEIVED METADATA"
     #define HOST_STOP_DATA_COLLECTION                       "HOST: STOP DATA COLLECTION"
     #define HOST_TERMINATE_SERVER                           "HOST: TERMINATE SERVER"
     // ZYNQ
     #define ZYNQ_READY_CMD                                  "ZYNQ: READY FOR DATA COLLECTION"
     #define ZYNQ_TERMINATATION_SUCCESSFUL                   "ZYNQ: TERMINATION SUCCESSFUL"
+
+
+
+// FLAG MASKS
+
+#define ENABLE_PSIO_MSK                                     0x01
+#define ENABLE_POT_MSK                                      0x02
+#define ENABLE_SAMPLE_RATE_MSK                              0x04
 
 #endif

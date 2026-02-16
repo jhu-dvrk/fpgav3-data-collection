@@ -59,6 +59,7 @@ class DataCollection {
             float force_torque[FORCE_SAMPLE_NUM_DEGREES];
             uint32_t digital_io;
             uint32_t mio_pins;
+            uint16_t pot_values[MAX_NUM_POTS];
         } proc_sample;
 
         struct DC_Time {
@@ -75,7 +76,11 @@ class DataCollection {
 
         int sm_state;
 
+        uint8_t options_mask = 0x00;
+
         bool use_ps_io = false;
+
+        bool use_pot = false;
 
         bool use_sample_rate = false;
 
@@ -116,7 +121,7 @@ class DataCollection {
         pthread_t collect_data_t;
     public:
         DataCollection();
-        bool init(uint8_t boardID, bool usePSIO, bool useSampleRate, int sample_rate);
+        bool init(uint8_t boardID, uint8_t optionsMask, int sample_rate);
         bool start();
         bool stop();
         bool terminate();
